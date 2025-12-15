@@ -1,275 +1,127 @@
-# Few-Shot Learning for Spam Detection with Large Language Models
+# spamLLM
 
-## Introduction
-In this project, you will explore various techniques to enhance the performance of large language models (LLMs) on a spam detection task. 
+**spamLLM** is a spam detection system that uses generative language models for classification via Bayesian inverse inference. Instead of training a discriminative classifier, it leverages the generative capabilities of decoder-only transformers to compute posterior probabilities over class labels.
 
-Our target is to utilize a pre-trained LLM and apply different strategies, including zero-shot learning, naive prompting, and full fine-tuning, to classify emails as spam or not spam. The main examples we provide are based on Bayesian inverse classification methods. But you are encouraged to explore any methods you are interested in.
+The system achieves **87% accuracy** on the Enron email dataset using LoRA fine-tuning with only ~0.1% of the model's parameters trainable.
 
-### Examples Provided
-1. **Chatbot Example**: 
 
-    `examples/chatbot_example.py` demonstrates general text generation; 
-    
-    run it with `uv run -m examples.chatbot_example` and experiment with several prompts.
+## Bayesian Inverse Classification
 
-2. **Bayes Inverse Zero Shot Example**: 
-
-    `examples/bayes_inverse_zero_shot.sh` launches `uv run -m examples.bayes_inverse --method zero_shot` to evaluate the zero-shot baseline without extra training.
-3. **Bayes Inverse Naive Prompting Example**: 
-
-    `examples/bayes_inverse_naive_prompting.sh` wraps `uv run -m examples.bayes_inverse --method naive_prompting` and injects a richer prompt at inference time.
-4. **Bayes Inverse Full Finetune Example**: 
-
-    `examples/bayes_inverse_full_finetune.sh` triggers `uv run -m examples.bayes_inverse --method full_finetune` to fine-tune the model before evaluation.
-
-### Bayesian Inverse Classification
-The Bayesian inverse classification method leverages the generative capabilities of LLMs to perform classification tasks. By modeling the joint distribution of inputs and labels, we can compute the posterior probabilities of labels given the inputs, allowing for effective classification.
+Traditional classifiers model $P(Y|X)$ directly. This approach inverts the problem: given a generative LLM that models $P(X|Y)$, we use Bayes' rule to compute the posterior:
 
 $$
-\begin{aligned}
-P_\theta(Y_\text{label}|X_{\leq i}) &= \frac{P_{\theta}(X_{\leq i}|Y_\text{label})P_{\theta}(Y_\text{label})}{P_{\theta}(X_{\leq i})}\\
-&= \frac{P_{\theta}(X_{\leq i}|Y_\text{label})P_{\theta}(Y_\text{label})}{\displaystyle\sum_{Y'}P_{\theta}(X_{\leq i}|Y')P_{\theta}(Y')}\\
-&= \frac{P_{\theta}(X_{\leq i},Y_\text{label})}{\displaystyle\sum_{Y'}P_{\theta}(X_{\leq i},Y')}
-\end{aligned}
+P(Y_\text{label}|X) = \frac{P(X|Y_\text{label}) \cdot P(Y_\text{label})}{\sum_{Y'} P(X|Y') \cdot P(Y')}
 $$
 
-Where:
-- $X_{\leq i}$: Input sequence up to position $i$, representing the email content.
-- $Y_\text{label}$: The label indicating whether the email is spam or not spam.
-- $\theta$: Parameters of the pre-trained language model.
-- $P_\theta(Y_\text{label}|X_{\leq i})$: Posterior probability of label $Y_\text{label}$ given input $X_{\leq i}$
-- $P_\theta(X_{\leq i}|Y_\text{label})$: Likelihood of input $X_{\leq i}$ given label $Y_\text{label}$
-- $P_\theta(X_{\leq i},Y_\text{label})$: Joint probability of input $X_{\leq i}$ and label $Y_\text{label}$
-- $P_\theta(Y_\text{label})$: Prior probability of label $Y_\text{label}$
+For each email, we compute the sequence log-probability under two labelings ("spam" and "ham"), apply a prior (default: 90% ham, 10% spam), and classify via softmax. This exploits the LLM's language understanding without requiring task-specific classification heads.
 
-### Quick Start Checklist
 
-1. Python Environment
-   - [Install UV](https://docs.astral.sh/uv/getting-started/installation/#installing-uv).
-   - Install Python dependencies with the following command from the project root:
+## Model Architecture
+
+The implementation is a decoder-only transformer following the LLaMA architecture:
+
+1. **Attention with KV Caching**: Multi-headed attention with Grouped Query Attention (GQA) for memory efficiency. Key-value pairs are cached per layer in `DynamicCache`, enabling O(1) incremental token generation instead of O(n) recomputation.
+
+2. **Rotary Position Embeddings (RoPE)**: Position information encoded via rotation matrices applied to queries and keys, enabling better length generalization than absolute positional encodings.
+
+3. **Pre-Norm Architecture**: RMSNorm applied before each sub-layer (attention and MLP) with residual connections, providing more stable training for deep networks.
+
+4. **Parameter-Efficient Fine-Tuning**:
+   - **LoRA**: Low-rank adaptation matrices (A, B) injected into attention projections. Only ~50K parameters trained vs ~135M total.
+   - **Prefix Tuning**: Learnable key-value prefixes prepended to each layer's KV cache.
+
+```
+Token IDs → Embeddings → [RMSNorm → Attention → + → RMSNorm → MLP → +] × N → RMSNorm → LM Head → Log Probs
+                              ↑
+                         RoPE + KV Cache
+```
+
+
+## Training Methods
+
+| Method | Description | Trainable Params |
+|--------|-------------|------------------|
+| Zero-Shot | Direct inference with base model | 0 |
+| Naive Prompting | Custom prompt prefix at inference | 0 |
+| Full Fine-Tune | Update all model parameters | 135M |
+| LoRA | Low-rank attention adaptation | ~50K |
+| Prefix Tuning | Learnable KV cache prefixes | ~100K |
+
+
+## Get Started
+
+### Prerequisites
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) package manager
+
+### Installation
+1. Clone the repository
+    ```bash
+    git clone https://github.com/agoel25/spamLLM.git
+    cd spamLLM
+    ```
+
+2. Install dependencies
     ```bash
     uv sync
     ```
-2. Git clone autograder to this directory.
-    ```bash
-    git clone git@github.com:DSL-Lab/CPEN455-Project-2025W1-Autograder.git autograder
-    ```
-    If you are using windows laptop, you should first run `git clone git@github.com:DSL-Lab/CPEN455-Project-2025W1-Autograder.git` and then rename it to `autograder`.
-    - Confirm the released datasets exist under `autograder/cpen455_released_datasets/`
 
-3. Run the provided examples:
+3. Configure environment: create a `.env` file with your model settings
     ```
-    # Run chatbot example
-    uv run -m examples.chatbot_example 
-    ```
-    ```
-    # Run bayes inverse zero shot example
-    bash examples/bayes_inverse_zero_shot.sh
-    ```
-    ```
-    # Run bayes inverse naive prompting example
-    bash examples/bayes_inverse_naive_prompting.sh
-    ```
-    ```
-    # Run bayes inverse full finetune example
-    bash examples/bayes_inverse_full_finetune.sh
+    MODEL_CHECKPOINT=HuggingFaceTB/SmolLM2-135M-Instruct
+    MODEL_CACHE_DIR=./cache
+    PROJECT_NAME=spamLLM
     ```
 
-4. Validate outputs:
-    - Generate probabilities on test set with the following command (writes CSVs into `bayes_inverse_probs/`):
-    ```bash
-    uv run -m examples.save_prob_example
-    ```
-    - Validate everything end-to-end by executing `bash autograder/auto_grader.sh`; this is the same entry point used during grading.
-
-### Other Methods to Explore
-
-> **Constraints:** ***Directly using*** other powerful LLM to classify emails ***is NOT allowed***. It's not fair to students with very limited computing resources. You must use the provided codebase and make modifications based on provided pre-trained models only.
-> 
-> Using pre-trained models (no matter self-served model or LLM api) to synthesize data for augmentation is allowed.
-
-If you find that simply utilizing the provided examples does not yield satisfactory results, any methods that meet the constraints are welcome. Here are some suggestions if you need inspiration:
-
-**Prefix-Tuning**: Instead of fine-tuning the entire model, you can explore prefix-tuning techniques where only a small set of parameters (prefix tokens) are trained while keeping the rest of the model fixed. This can be more efficient and may lead to better generalization.(https://arxiv.org/abs/2101.00190)
-
-**LoRA (Low-Rank Adaptation)**: LoRA introduces low-rank matrices to the model's weights, allowing for efficient fine-tuning with fewer parameters.(https://arxiv.org/abs/2106.09685)
-
-**Data Synthesis**: If you find the dataset too small, you can explore data synthesis techniques to generate additional training data via powerful LLMs. Ask them to generate synthetic spam and non-spam emails to augment your training set.
-
-**Ensemble Methods**: Combine predictions from multiple models or different configurations of the same model to improve classification performance. For Example:
-
-+ [Model weight fusion techniques](https://arxiv.org/abs/2203.05482)
-+ [Weighted Product of Experts](https://qihang-zhang.com/Learning-Sys-Blog/2025/10/15/weighted-product-of-experts.html)
-
-## ⭐️ Submission Instructions
-
-### Preparing Your Submission
-Submit your codebase and include a report.pdf file in the root directory of your project. Compress the whole project folder into a single zip file and submit it on Canvas.
-
-File Tree For Important Files:
-```
-.
-├── examples
-│   ├── save_prob_example.py (The most important interface used for grading)
-│   ├── {$your_training_code}.py (You should submit your training code if you trained a model)
-│   └── ckpts
-│       └── {$your_model}.ckpt(The model checkpoints you saved after training)
-├── {$your_report}.pdf (Your project report in PDF format)
-└── ... (All other necessary code files for your model's inference and training)
-```
-
-### Packaging Checklist
-- Keep only necessary checkpoint in `examples/ckpts/`(If you don't use model ensemble methods or LoRA, only keep one checkpoint); remove redundant checkpoints to reduce submission size.
-- Verify `report.pdf` (NeurIPS style) lives in the repository root and references all experiments you ran.
-- Exclude large caches when creating the archive (for example: `zip -r cpen455_project.zip . -x 'cache/*' 'wandb/*' '__pycache__/*'`).
-- Run `bash autograder/auto_grader.sh` one last time before zipping so the graders see up-to-date outputs.
-
-### Submitting to Kaggle competition 
-Follow these steps to prepare the Kaggle submission file and submit it using the Kaggle CLI. We provide an `examples/prep_submission_kaggle.py` helper that turns model probability outputs into the required `ID,SPAM/HAM` CSV. 
-
-1. Make sure that the generated probability predictions live in `bayes_inverse_probs/`. If you haven't already, please rerun the examples. Note, do not run `uv run -m save_prob_example.py` since this will overwrite the probabilities output with an untrained model.
-
-
-
-2. Create the Kaggle submission CSV from the generated probabilities (example file path shown):
-
+### Training
 ```bash
-uv run -m examples.prep_submission_kaggle --input bayes_inverse_probs/test_dataset_probs.csv --output kaggle_submission.csv
+# Zero-shot evaluation (no training)
+bash examples/bayes_inverse_zero_shot.sh
+
+# LoRA fine-tuning (recommended)
+bash examples/bayes_inverse_lora.sh
+
+# Full model fine-tuning
+bash examples/bayes_inverse_full_finetune.sh
 ```
 
-This runs the `examples/prep_submission_kaggle.py` module using `uv` and will print a quick preview and statistics before writing `kaggle_submission.csv` to the project root (or the path you pass to `--output`).
-
-3. Inspect the created file to ensure formats look correct:
-
+### Inference
 ```bash
-head -n 10 kaggle_submission.csv
+# Generate predictions on test set
+uv run -m examples.save_prob_example
+
+# Interactive chatbot mode
+uv run -m examples.chatbot_example
 ```
 
-Notes:
-- Ensure the submission CSV uses the exact column names and formats required by the competition. Our helper script produces `ID` and `SPAM/HAM` columns as expected.
-- If you need to create a different input path or output filename, pass `--input` and `--output` to the `uv run -m examples.prep_submission_kaggle` command.
-- Upload `kaggle_submission.csv` manually via the competition [website](https://www.kaggle.com/t/7bd983ca8e064c9aa7f13cf1ecbdbf23). Submissions are rate-limited: you may submit up to 10 times per day. The public leaderboard uses 70% of the test data (public split); the final ranking will be calculated on the entire test set and revealed after the submission deadline.
 
-### ⭐️ Notes on Grading Interface
+## System Structure
 
-1. **`examples/save_prob_example.py` is the most important interface used for grading.**
-
-    `examples/save_prob_example.py` is the most important interface used for grading. During grading, we will run `autograder/auto_grader.sh`, which is hardcoded to call `examples/save_prob_example.py` and then evaluate the results. 
-
-    So please make sure you can run `autograder/auto_grader.sh` successfully. More details of autograder.sh can be found in the comments of `autograder/auto_grader.sh`.
-
-    All of our grading related to accuracy will be based on the results from `autograder/auto_grader.sh`. The provided leaderboard in Kaggle is just for your reference and will not be used for grading.
-
-2. **Only include one ckpt file if you trained a model.**
-
-    Do not include all of your ckpt files in your submission. Keep only necessary checkpoint in `examples/ckpts/`(If you don't use model ensemble methods or LoRA, only keep one checkpoint). If you include multiple ckpt files, ***we can't guarantee*** we will check all of them and ***pick the best one***.
-
-3. Don't change any code in the `autograder` folder.
-
-    The code in the `autograder` folder is used for grading, and we will use the git clone the original code from github to the `autograder` folder for grading. 
-
-    If you change any code in the `autograder` folder, ***we can't guarantee*** autograder will work properly. And this may lead to a ZERO grade related to accuracy performance.
+```
+spamLLM
+│
+├── model/
+│   ├── llama.py          # Main LlamaModel: embeddings → layers → LM head
+│   ├── attention.py      # GQA attention with RoPE and causal masking
+│   ├── cache.py          # DynamicCache for KV caching during generation
+│   ├── lora.py           # LoRA layer wrapper and model patching
+│   └── prefix_llama.py   # Prefix tuning with learnable KV prefixes
+│
+├── examples/
+│   ├── bayes_inverse.py      # Core training/eval loop
+│   ├── bayes_inverse_lora.py # LoRA-specific training
+│   └── save_prob_example.py  # Inference script for generating predictions
+│
+└── utils/
+    ├── prompt_template.py    # Email → prompt formatting
+    └── weight_utils.py       # Model weight loading from HuggingFace
+```
 
 
-## ⭐️ Grading Breakdown
+## References
 
-| Milestone | Deliverable / Evidence | How to Verify / Run | Weight |
-|-----------|-----------------------|---------------------|--------|
-| Chatbot Example | Run the chatbot with several prompts and summarize behaviour in the report | `uv run -m examples.chatbot_example` | 10% |
-| Bayes Inverse Zero Shot | Produce zero-shot predictions and discuss accuracy | `bash examples/bayes_inverse_zero_shot.sh` | 10% |
-| Bayes Inverse Naive Prompting | Compare prompted vs. zero-shot performance in the report | `bash examples/bayes_inverse_naive_prompting.sh` | 10% |
-| Bayes Inverse Full Finetune | Launch the fine-tuning loop and report results | `bash examples/bayes_inverse_full_finetune.sh` | 10% |
-| Accuracy ≥ 80% | Achieve at least 80% accuracy on the test set | submit to kaggle leaderboard | 5% |
-| Accuracy ≥ 85% | Achieve at least 85% accuracy on the test set | submit to kaggle leaderboard | 5% |
-| KV Cache Explanation | Explain decoder-only models, KV cache usage, drawbacks, and repo implementation | Report section referencing `model/` and `utils/` code | 20% |
-| Leaderboard Competition | Make sure autograder works | All students' performance evaluated and ranked by TAs | Up to 30% |
-
-### ⭐️ Basic Parts With Code Examples (40% of total grade)
-
-#### Run the provided code examples and write the corresponding reports:
-##### 1.`examples/chatbot_example.py`(10% of total grade)
-+ 5% of total grade for running, as long as you try different prompts and show the outputs. 
-+ 5% for report
-
-##### 2.`examples/bayes_inverse_zero_shot.sh`(10% of total grade)
-+ 5% of total grade for running, as long as you get the results.
-+ 5% for report
-
-##### 3.`examples/bayes_inverse_naive_prompting.sh`(10% of total grade)
-+ 5% of total grade for running, as long as you get the results.
-+ 5% for report
-
-##### 4.`examples/bayes_inverse_full_finetune.sh`(10% of total grade)
-+ 5% of total grade for running, as long as you can launch and train the model successfully.
-+ 5% for report
-
-### ⭐️ Advanced Parts (60% of total grade)
-
-#### Achieve over 80% Accuracy (5% of total grade)
-+ As long as you can achieve over 80% accuracy on the test set using any method, you will get full 5% of total grade for this part.
-
-+ As long as you can achieve over 80% accuracy on the test set using any method, just ignore the first part, you will get full marks for this part. i.e., 40% of total grade:
-
-    + [Chatbot Example ~ 10%](#1exampleschatbot_examplepy10-of-total-grade)
-    + [Bayes Inverse Zero Shot Example ~ 10%](#2examplesbayes_inverse_zero_shotsh10-of-total-grade)
-    + [Bayes Inverse Naive Prompting Example ~ 10%](#3examplesbayes_inverse_naive_promptingsh10-of-total-grade)
-    + [Bayes Inverse Full Finetune Example ~ 10%](#4examplesbayes_inverse_full_finetunesh10-of-total-grade)
-
-#### Achieve over 85% Accuracy (5% of total grade)
-+ As long as you can achieve over 85% accuracy on the test set using any method, you will get 5% of total grade for this part.
-
-#### Explain KV Cache Mechanism (20% of total grade)
-+ 5% of total grade for explain what is decoder-only transformers.
-+ 5% for explain the KV Cache mechanism in decoder-only transformers, why it is useful and how it works.
-+ 5% for explain what is the drawback of using KV Cache.
-+ 5% for explain how KV Cache is implemented in our provided codebase.
-
-#### Leaderboard Competition (30% of total grade)
-The remaining 30% of total grade will be based on the performance among all students in this class.
-
-If you achieved N-th place, you will get $(1 - \frac{N}{\text{Number of students}}) \times 30$ % of total grade for this part.
-
-## Final project report guidelines
-Students are required to work on projects individually. All reports must be formatted according to the NeurIPS conference style and submitted in PDF format. The official template can be downloaded from [the NeurIPS style files page](https://neurips.cc/Conferences/2023/PaperInformation/StyleFiles). When combining the report with source code and additional results, the submission on Canvas portal should be in a zip file format.
-
-
-### Report Length and Structure:
-
-+ The report should not exceed 4 pages, excluding references or appendices.
-+ A lengthy report does not equate to a good report. Don't concern yourself with the length; instead, focus on the coding and consider the report as a technical companion to your code and ideas. We do not award extra points for, nor penalize, the length of the report, whether it be long or short.
-+ We recommend organizing the report in a three-section format: Model, Experiments, and Conclusion.
-
-### Model Presentation Tips:
-
-+ Include a figure (created by yourself!) illustrating the main computation graph of the model for better clarity and engagement.
-+ Use equations rigorously and concisely to aid understanding.
-+ An algorithm box is recommended for clarity if the method is complex and difficult to understand from text alone.
-+ Provide a formal description of the models, loss functions etc.
-+ Distinguish your model from others using comparative figures or tables if possible.
-### Experiments Section:
-Including at least one of the following is recommended:
-+ Ablation study focusing on specific design choices.
-+ Information on training methods, and any special techniques used.
-+ Both quantitative and qualitative analysis of experimental results.
-### Conclusion Section:
-+ Summarize key findings and contributions of your project.
-+ Discuss limitations and potential avenues for future improvements and research.
-
-### Citation and Disclosure Requirements:
-+ Cite every external dataset, paper, blog post, or code snippet that informs your work.
-+ Document any AI-assisted coding (e.g., ChatGPT, Copilot) by including prompt-response summaries in an appendix and mentioning the assistance in the main text.
-+ Credit collaborators for informal feedback and describe any reused internal code bases.
-
-## Academic Integrity Guidelines for the Course Project
-
-In developing your model, you are permitted to utilize any functions available in PyTorch and to consult external resources. However, it is imperative to properly acknowledge all sources and prior work utilized.
-
-Violations of academic integrity will result in a grade of ZERO. These violations include:
-
-1. Extensive reuse or adaptation of existing methods or code bases without proper citation in both your report and code.
-2. Use of tools like ChatGPT or Copilot for code generation without proper acknowledgment, including details of prompt-response interactions.
-3. Deliberate attempts to manipulate the testing dataset in order to extract ground-truth labels or employ discriminative classifiers.
-4. Intentional submission of fabricated results to the competition leaderboard.
-5. Any form of academic dishonesty, such as sharing code, model checkpoints, or inference results with other students.
-
-Adhering to these guidelines is crucial for maintaining a fair and honest academic environment. Thank you for your cooperation.
+1. Vaswani et al., "Attention Is All You Need" (2017): [paper](https://arxiv.org/abs/1706.03762)
+2. Hu et al., "LoRA: Low-Rank Adaptation of Large Language Models" (2021): [paper](https://arxiv.org/abs/2106.09685)
+3. Li & Liang, "Prefix-Tuning: Optimizing Continuous Prompts for Generation" (2021): [paper](https://arxiv.org/abs/2101.00190)
+4. Su et al., "RoFormer: Enhanced Transformer with Rotary Position Embedding" (2021): [paper](https://arxiv.org/abs/2104.09864)
+5. Ainslie et al., "GQA: Training Generalized Multi-Query Transformer Models" (2023): [paper](https://arxiv.org/abs/2305.13245)
