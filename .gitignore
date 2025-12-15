@@ -1,0 +1,13 @@
+
+# Caches / model downloads
+cache/
+.cache/
+**/cache/huggingface/
+**/.cache/huggingface/
+
+# big artifacts + caches (don’t commit)
+cache/
+.cache/
+**/cache/huggingface/
+**/.cache/huggingface/
+*.zip
