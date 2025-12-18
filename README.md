@@ -2,7 +2,7 @@
 
 **spamLLM** is a spam detection system that uses generative language models for classification via Bayesian inverse inference. Instead of training a discriminative classifier, it leverages the generative capabilities of decoder-only transformers to compute posterior probabilities over class labels.
 
-The system achieves **87% accuracy** on the Enron email dataset using LoRA fine-tuning with only ~0.1% of the model's parameters trainable.
+The system achieves **95% accuracy** on the Enron email dataset using LoRA fine-tuning with only ~0.1% of the model's parameters trainable.
 
 
 ## Bayesian Inverse Classification
